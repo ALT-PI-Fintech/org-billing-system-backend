@@ -1,10 +1,17 @@
 import { where } from "sequelize";
 import { models } from "../../models/index.js";
 import { raw } from "mysql2";
+import { generateUniqueString } from "../../utils/uniqueString.js";
 // import { raw } from "body-parser";
 
-const { customer, customer_biller_cref, biller, biller_bills, currency } =
-  models;
+const {
+  customer,
+  customer_biller_cref,
+  biller,
+  biller_bills,
+  currency,
+  consumer_request,
+} = models;
 
 export const getCustomerBills = async (req, res) => {
   try {
@@ -30,6 +37,8 @@ export const getCustomerBills = async (req, res) => {
 
     let billerData = [];
     for (const cust of custBills) {
+      console.log(cust, "******************");
+
       const billerInfo = await biller.findOne({
         raw: true,
         attributes: [
@@ -87,9 +96,9 @@ export const getCustomerBills = async (req, res) => {
 export const generateQrforBill = async (req, res) => {
   try {
     const { id } = req.user;
-    const txnId = 12345;
     const { biller_code, biller_customer_account_no, biller_bill_no } =
       req.body;
+    const txnCode = generateUniqueString(biller_code);
 
     if (!biller_code || !biller_customer_account_no) {
       return res
@@ -109,21 +118,31 @@ export const generateQrforBill = async (req, res) => {
         .status(500)
         .json({ success: false, message: "Something Went Wrong!" });
     }
-    const { biller_bill_amount } = await biller_bills.findOne({
-      raw: true,
-      where: {
-        biller_id: findBiller.biller_id,
-        biller_customer_account_no: biller_customer_account_no,
-      },
-      attributes: ["biller_bill_amount"],
+    const { biller_bill_amount, transaction_code } = await biller_bills.findOne(
+      {
+        raw: true,
+        where: {
+          biller_id: findBiller.biller_id,
+          biller_customer_account_no: biller_customer_account_no,
+        },
+        attributes: ["biller_bill_amount", "transaction_code"],
+      }
+    );
+
+    await consumer_request.create({
+      txn_unique_number: txnCode,
+      amount: biller_bill_amount,
+      valid_upto: 1,
+      biller_code: biller_code,
+      consumer_number: biller_customer_account_no,
     });
 
-    const intent = `upi://pay?tr=&tid=&pa=&mc=1234&pn=${findBiller.biller_name}&am=${biller_bill_amount}&cu=&tn=Pay%20for%20merchant`;
+    const intent = `upi://pay?tr=${txnCode}&tid=&pa=&mc=1234&pn=${findBiller.biller_name}&am=${biller_bill_amount}&cu=&tn=Pay%20for%20merchant`;
     // biller id
     return res.status(200).json({
       success: true,
       data: intent,
-      txnId,
+      txnId: txnCode,
     });
     // generate QR code ---------- here
   } catch (err) {
